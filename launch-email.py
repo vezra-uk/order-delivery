@@ -56,6 +56,10 @@ def da_api_post(endpoint, data):
         return response.text
     except requests.RequestException as e:
         logger.error(f"API POST request failed: {e}")
+        # Do not exit immediately on 500 for SSL cert, let the caller handle retries
+        if "500 Server Error" in str(e) and "skipped due to unreachable" in response.text:
+            logger.warning("Caught 500 error related to unreachable ACME challenge. This might be due to DNS propagation. Returning error for retry logic.")
+            return f"ERROR: {response.text}" # Return error message to indicate specific failure
         sys.exit(1)
 
 def add_domain(domain):
@@ -156,8 +160,9 @@ def add_dns_records(domain, dkim_key):
 
 
 def request_ssl_cert(domain):
-    logger.info(f"Requesting SSL cert via ACME for mail.{domain} and webmail.{domain}")
-    return da_api_post("/CMD_SSL", {
+    logger.info(f"Attempting to request SSL cert via ACME for mail.{domain} and webmail.{domain}")
+    # The da_api_post function now returns the error string if it's the specific 500 error
+    response_text = da_api_post("/CMD_SSL", {
         "acme_provider": "letsencrypt",
         "action": "save",
         "background": "auto",
@@ -172,11 +177,12 @@ def request_ssl_cert(domain):
         "type": "create",
         "wildcard": "no"
     })
+    return response_text # Return the full response text for checking
 
 def cert_ready(domain):
     logger.info("Checking if SSL cert is ready...")
     resp = da_api_post("/CMD_API_SSL", {"domain": domain})
-    ready = "Certificate for" in resp and "mail." in resp and "webmail." in resp
+    ready = "Certificate for" in resp and f"mail.{domain}" in resp and f"webmail.{domain}" in resp
     logger.debug(f"Certificate ready: {ready}")
     return ready
 
@@ -189,6 +195,25 @@ def wait_for_cert(domain):
         time.sleep(30)
     logger.warning("Certificate not ready after 10 mins.")
     return False
+
+# New function to handle retries for SSL certificate request
+def retry_request_ssl_cert(domain, max_retries=10, delay_seconds=60):
+    for attempt in range(1, max_retries + 1):
+        logger.info(f"Attempt {attempt}/{max_retries} to request SSL certificate for {domain}...")
+        response = request_ssl_cert(domain)
+
+        if "ERROR: mail." in response and "was skipped due to unreachable http://" in response and "webmail." in response and "was skipped due to unreachable http://" in response:
+            logger.warning(f"SSL certificate request failed due to unreachable challenge. Waiting {delay_seconds} seconds before retrying...")
+            time.sleep(delay_seconds)
+        elif "Certificate for" in response and f"mail.{domain}" in response and f"webmail.{domain}" in response:
+            logger.info("Initial SSL certificate request seems to have initiated successfully (or already completed).")
+            return True # Proceed to wait_for_cert
+        else:
+            # If it's a different error or success, proceed
+            logger.info("SSL certificate request response received (not the specific unreachable error). Proceeding.")
+            return True
+    logger.error(f"Failed to request SSL certificate after {max_retries} attempts. Please check DNS propagation and server configuration.")
+    sys.exit(1)
 
 def create_email(domain, user, quota):
     quota_map = {
@@ -229,7 +254,7 @@ def main():
     add_domain(domain)
     dkim = get_dkim(domain)
     add_dns_records(domain, dkim)
-    request_ssl_cert(domain)
+    retry_request_ssl_cert(domain)
     wait_for_cert(domain)
     password = create_email(domain, username, quota)
 
