@@ -255,7 +255,6 @@ def main():
     dkim = get_dkim(domain)
     add_dns_records(domain, dkim)
     retry_request_ssl_cert(domain)
-    wait_for_cert(domain)
     password = create_email(domain, username, quota)
 
     logger.info("\n[✅] Setup Complete!")
