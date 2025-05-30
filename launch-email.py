@@ -6,6 +6,8 @@ import sys
 import os
 import logging
 import json
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # === SETUP LOGGING ===
 logging.basicConfig(
