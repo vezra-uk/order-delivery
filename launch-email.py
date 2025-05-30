@@ -4,15 +4,24 @@ import secrets
 import string
 import sys
 import os
+import logging
+
+# === SETUP LOGGING ===
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
+logger = logging.getLogger()
 
 # === LOAD CONFIG FROM ENVIRONMENT VARIABLES ===
-DA_API_URL = os.getenv("DA_API_URL", "https://your-mxroute-server:2222")
+DA_API_URL = os.getenv("DA_API_URL")
 DA_USERNAME = os.getenv("DA_USERNAME")
 DA_PASSWORD = os.getenv("DA_PASSWORD")
 NAMESILO_API_KEY = os.getenv("NAMESILO_API_KEY")
 
 if not DA_USERNAME or not DA_PASSWORD or not NAMESILO_API_KEY:
-    print("ERROR: Please set DA_USERNAME, DA_PASSWORD, and NAMESILO_API_KEY environment variables.")
+    logger.error("Please set DA_USERNAME, DA_PASSWORD, and NAMESILO_API_KEY environment variables.")
     sys.exit(1)
 
 
@@ -28,32 +37,47 @@ MX_RECORDS = [
 
 def random_password(length=12):
     chars = string.ascii_letters + string.digits + "!@#$%&"
-    return ''.join(secrets.choice(chars) for _ in range(length))
+    pwd = ''.join(secrets.choice(chars) for _ in range(length))
+    logger.debug(f"Generated random password: {pwd}")
+    return pwd
 
 def da_api_post(endpoint, data):
     url = f"{DA_API_URL}{endpoint}"
-    response = requests.post(url, data=data, auth=(DA_USERNAME, DA_PASSWORD), verify=False)
-    response.raise_for_status()
-    return response.text
+    logger.info(f"POST to {url} with data: {data}")
+    try:
+        response = requests.post(url, data=data, auth=(DA_USERNAME, DA_PASSWORD), verify=False)
+        response.raise_for_status()
+        logger.debug(f"Response: {response.text}")
+        return response.text
+    except requests.RequestException as e:
+        logger.error(f"API POST request failed: {e}")
+        sys.exit(1)
 
 def add_domain(domain):
-    print(f"[+] Adding domain: {domain}")
+    logger.info(f"Adding domain: {domain}")
     return da_api_post("/CMD_API_DOMAIN", {"action": "create", "domain": domain})
 
 def get_dkim(domain):
-    print("[+] Fetching DKIM key...")
+    logger.info("Fetching DKIM key...")
     result = da_api_post("/CMD_API_EMAIL_DKIM", {"domain": domain})
     parsed = dict(line.split('=', 1) for line in result.split('&') if '=' in line)
-    return parsed.get("publickey", "").replace("-----BEGIN PUBLIC KEY-----", "").replace("-----END PUBLIC KEY-----", "").strip()
+    dkim_key = parsed.get("publickey", "").replace("-----BEGIN PUBLIC KEY-----", "").replace("-----END PUBLIC KEY-----", "").strip()
+    logger.debug(f"DKIM key: {dkim_key}")
+    return dkim_key
 
 def namesilo_dns_add(domain, host, record_type, value, priority=""):
-    print(f"[+] Adding DNS record to NameSilo: {host}.{domain} -> {record_type} {value}")
+    logger.info(f"Adding DNS record to NameSilo: {host}.{domain} -> {record_type} {value}")
     url = f"https://www.namesilo.com/api/dnsAddRecord?version=1&type={record_type}&domain={domain}&rrhost={host}&rrvalue={value}&rrttl=7207&key={NAMESILO_API_KEY}"
     if record_type == "MX" and priority:
         url += f"&rrpriority={priority}"
-    response = requests.get(url)
-    response.raise_for_status()
-    return response.text
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+        logger.debug(f"NameSilo response: {response.text}")
+        return response.text
+    except requests.RequestException as e:
+        logger.error(f"NameSilo DNS add failed: {e}")
+        sys.exit(1)
 
 def add_dns_records(domain, dkim_key):
     for host, record_type, value, priority in MX_RECORDS:
@@ -62,7 +86,7 @@ def add_dns_records(domain, dkim_key):
     namesilo_dns_add(domain, "x._domainkey", "TXT", f'"v=DKIM1; k=rsa; p={dkim_key}"')
 
 def request_ssl_cert(domain):
-    print(f"[+] Requesting SSL cert via ACME for mail.{domain} and webmail.{domain}")
+    logger.info(f"Requesting SSL cert via ACME for mail.{domain} and webmail.{domain}")
     return da_api_post("/CMD_SSL", {
         "acme_provider": "letsencrypt",
         "action": "save",
@@ -80,35 +104,36 @@ def request_ssl_cert(domain):
     })
 
 def cert_ready(domain):
-    print("[*] Checking if SSL cert is ready...")
+    logger.info("Checking if SSL cert is ready...")
     resp = da_api_post("/CMD_API_SSL", {"domain": domain})
-    return "Certificate for" in resp and "mail." in resp and "webmail." in resp
+    ready = "Certificate for" in resp and "mail." in resp and "webmail." in resp
+    logger.debug(f"Certificate ready: {ready}")
+    return ready
 
 def wait_for_cert(domain):
-    print("[*] Waiting for SSL cert issuance...")
+    logger.info("Waiting for SSL cert issuance...")
     for _ in range(20):  # wait max 10 mins
         if cert_ready(domain):
-            print("[+] Certificate is ready!")
+            logger.info("Certificate is ready!")
             return True
         time.sleep(30)
-    print("[-] Certificate not ready after 10 mins.")
+    logger.warning("Certificate not ready after 10 mins.")
     return False
 
 def create_email(domain, user, quota):
-    # Convert quota string to MB integer
     quota_map = {
         "5GB": 5120,
         "10GB": 10240,
         "25GB": 25600
     }
     if quota not in quota_map:
-        print("ERROR: Quota must be one of: 5GB, 10GB, 25GB")
+        logger.error("Quota must be one of: 5GB, 10GB, 25GB")
         sys.exit(1)
 
     quota_mb = quota_map[quota]
 
     password = random_password()
-    print(f"[+] Creating email account: {user}@{domain} with quota {quota}")
+    logger.info(f"Creating email account: {user}@{domain} with quota {quota}")
     da_api_post("/CMD_API_POP", {
         "action": "create",
         "domain": domain,
@@ -123,8 +148,8 @@ def create_email(domain, user, quota):
 # === MAIN SCRIPT ===
 def main():
     if len(sys.argv) != 4:
-        print("Usage: python setup_mxroute_user.py <domain> <username> <quota>")
-        print("Quota must be one of: 5GB, 10GB, 25GB")
+        logger.error("Usage: python setup_mxroute_user.py <domain> <username> <quota>")
+        logger.error("Quota must be one of: 5GB, 10GB, 25GB")
         sys.exit(1)
 
     domain = sys.argv[1]
@@ -138,9 +163,9 @@ def main():
     wait_for_cert(domain)
     password = create_email(domain, username, quota)
 
-    print("\n[✅] Setup Complete!")
-    print(f"Email: {username}@{domain}")
-    print(f"Password: {password}")
+    logger.info("\n[✅] Setup Complete!")
+    logger.info(f"Email: {username}@{domain}")
+    logger.info(f"Password: {password}")
 
 
 if __name__ == "__main__":
