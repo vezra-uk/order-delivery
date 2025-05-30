@@ -5,6 +5,7 @@ import string
 import sys
 import os
 import logging
+import json
 
 # === SETUP LOGGING ===
 logging.basicConfig(
@@ -58,12 +59,34 @@ def add_domain(domain):
     return da_api_post("/CMD_API_DOMAIN", {"action": "create", "domain": domain})
 
 def get_dkim(domain):
-    logger.info("Fetching DKIM key...")
-    result = da_api_post("/CMD_API_EMAIL_DKIM", {"domain": domain})
-    parsed = dict(line.split('=', 1) for line in result.split('&') if '=' in line)
-    dkim_key = parsed.get("publickey", "").replace("-----BEGIN PUBLIC KEY-----", "").replace("-----END PUBLIC KEY-----", "").strip()
-    logger.debug(f"DKIM key: {dkim_key}")
-    return dkim_key
+    logger.info(f"Fetching DKIM key for domain {domain}...")
+    endpoint = "/CMD_DNS_CONTROL"
+    params = {
+        "json": "yes",
+        "domain": domain,
+        "ttl": "yes"
+    }
+    url = f"{DA_API_URL}{endpoint}"
+    try:
+        response = requests.get(url, params=params, auth=(DA_USERNAME, DA_PASSWORD), verify=False)
+        response.raise_for_status()
+        data = response.json()
+
+        # Look for TXT record with name == "x._domainkey"
+        for record in data.get("records", []):
+            if record.get("type") == "TXT" and record.get("name") == "x._domainkey":
+                dkim_value = record.get("value", "")
+                # The value might be quoted, remove quotes if any
+                dkim_key = dkim_value.strip('"')
+                logger.info(f"Found DKIM key: {dkim_key[:30]}...")  # log first 30 chars
+                return dkim_key
+        
+        logger.error("DKIM TXT record not found in DNS records.")
+        return ""
+
+    except requests.RequestException as e:
+        logger.error(f"Failed to fetch DKIM key: {e}")
+        sys.exit(1)
 
 def namesilo_dns_add(domain, host, record_type, value, priority=""):
     logger.info(f"Adding DNS record to NameSilo: {host}.{domain} -> {record_type} {value}")
