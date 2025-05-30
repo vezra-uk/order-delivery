@@ -13,7 +13,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # === SETUP LOGGING ===
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format='%(asctime)s [%(levelname)s] %(message)s',
     handlers=[logging.StreamHandler(sys.stdout)]
 )
@@ -95,7 +95,7 @@ def get_dkim(domain):
 def namesilo_dns_add(domain, host, record_type, value, priority=""):
     logger.info(f"Adding DNS record to NameSilo: {host}.{domain} -> {record_type} {value}")
     url = f"https://www.namesilo.com/api/dnsAddRecord?version=1&type=json&rrtype={record_type}&domain={domain}&rrvalue={value}&rrttl=7207&key={NAMESILO_API_KEY}"
-
+    logger.info(url)
     # Conditionally add rrhost if it's not the root domain ("@")
     if host and host != "@":
         url += f"&rrhost={host}"
@@ -114,12 +114,14 @@ def namesilo_dns_add(domain, host, record_type, value, priority=""):
         response.raise_for_status() # Raises an HTTPError for bad responses (4xx or 5xx)
         response_json = response.json() # Parse the JSON response
         logger.debug(f"NameSilo response (JSON): {response_json}")
-        
-        reply_data = response_json.get('namesilo', {}).get('reply', {})
-        reply_code = reply_data.get('code')
+ 
+        reply_data = response_json.get('reply', {})
+        logger.debug(reply_data)
+        reply_code = str(reply_data.get('code'))
+        logger.debug(reply_code)
         reply_detail = reply_data.get('detail')
 
-        if reply_code == '300': # NameSilo's success code
+        if reply_code == "300": # NameSilo's success code
             logger.info(f"Successfully added DNS record: {host}.{domain} -> {record_type} {value}")
         else:
             logger.error(f"NameSilo DNS add failed with code {reply_code}: {reply_detail}")
