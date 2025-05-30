@@ -95,6 +95,7 @@ def get_dkim(domain):
 def namesilo_dns_add(domain, host, record_type, value, priority=""):
     logger.info(f"Adding DNS record to NameSilo: {host}.{domain} -> {record_type} {value}")
     url = f"https://www.namesilo.com/api/dnsAddRecord?version=1&type={record_type}&domain={domain}&rrhost={host}&rrvalue={value}&rrttl=7207&key={NAMESILO_API_KEY}"
+    logger.info(url)
     if record_type == "MX" and priority:
         url += f"&rrpriority={priority}"
     try:
