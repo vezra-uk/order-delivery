@@ -5,6 +5,8 @@ import string
 import sys
 import os
 import logging
+from dotenv import load_dotenv
+load_dotenv()
 
 # === SETUP LOGGING ===
 logging.basicConfig(
