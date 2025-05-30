@@ -1,0 +1,11 @@
+# .env file
+
+# DirectAdmin API URL (include protocol and port)
+DA_API_URL=https://your-mxroute-server:2222
+
+# DirectAdmin credentials
+DA_USERNAME=admin
+DA_PASSWORD=your_directadmin_password
+
+# NameSilo API Key
+NAMESILO_API_KEY=your_namesilo_api_key
