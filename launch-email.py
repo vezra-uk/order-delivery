@@ -94,9 +94,12 @@ def get_dkim(domain):
 
 def namesilo_dns_add(domain, host, record_type, value, priority=""):
     logger.info(f"Adding DNS record to NameSilo: {host}.{domain} -> {record_type} {value}")
-    url = f"https://www.namesilo.com/api/dnsAddRecord?version=1&type={record_type}&domain={domain}&rrhost={host}&rrvalue={value}&rrttl=7207&key={NAMESILO_API_KEY}"
+    url = f"https://www.namesilo.com/api/dnsAddRecord?version=1&type=json&rrtype={record_type}&domain={domain}&rrvalue={value}&rrttl=7207&key={NAMESILO_API_KEY}"
 
-    # Ensure rrpriority is always included for MX records
+    # Conditionally add rrhost if it's not the root domain ("@")
+    if host and host != "@":
+        url += f"&rrhost={host}"
+
     if record_type == "MX":
         if not priority:
             logger.warning("MX record type requires a priority. 'priority' parameter is empty. Sending with empty priority.")
@@ -104,20 +107,43 @@ def namesilo_dns_add(domain, host, record_type, value, priority=""):
     elif record_type == "SRV" and priority: # SRV also uses priority but it's optional
         url += f"&rrpriority={priority}"
 
+    logger.debug(f"NameSilo DNS add URL: {url}") # Log the full URL being sent
+
     try:
         response = requests.get(url)
-        response.raise_for_status()
-        logger.debug(f"NameSilo response: {response.text}")
-        return response.text
+        response.raise_for_status() # Raises an HTTPError for bad responses (4xx or 5xx)
+        response_json = response.json() # Parse the JSON response
+        logger.debug(f"NameSilo response (JSON): {response_json}")
+        
+        reply_data = response_json.get('namesilo', {}).get('reply', {})
+        reply_code = reply_data.get('code')
+        reply_detail = reply_data.get('detail')
+
+        if reply_code == '300': # NameSilo's success code
+            logger.info(f"Successfully added DNS record: {host}.{domain} -> {record_type} {value}")
+        else:
+            logger.error(f"NameSilo DNS add failed with code {reply_code}: {reply_detail}")
+            sys.exit(1) # Exiting on non-success API response
+
+        return response_json
     except requests.RequestException as e:
-        logger.error(f"NameSilo DNS add failed: {e}")
+        logger.error(f"Network request to NameSilo DNS add failed: {e}")
+        sys.exit(1)
+    except json.JSONDecodeError as e:
+        logger.error(f"Failed to parse NameSilo JSON response: {e}")
+        logger.error(f"Raw response text: {response.text}") # Log raw text for debugging
+        sys.exit(1)
+    except Exception as e: # Catch any other unexpected errors during processing
+        logger.error(f"An unexpected error occurred: {e}")
         sys.exit(1)
 
+# Your existing add_dns_records function:
 def add_dns_records(domain, dkim_key):
     for host, record_type, value, priority in MX_RECORDS:
         namesilo_dns_add(domain, host, record_type, value, priority)
     # Add x._domainkey
     namesilo_dns_add(domain, "x._domainkey", "TXT", f'"v=DKIM1; k=rsa; p={dkim_key}"')
+
 
 def request_ssl_cert(domain):
     logger.info(f"Requesting SSL cert via ACME for mail.{domain} and webmail.{domain}")
