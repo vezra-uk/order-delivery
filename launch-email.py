@@ -60,7 +60,15 @@ def da_api_post(endpoint, data):
 
 def add_domain(domain):
     logger.info(f"Adding domain: {domain}")
-    return da_api_post("/CMD_API_DOMAIN", {"action": "create", "domain": domain})
+    return da_api_post("/CMD_DOMAIN", {
+	"action": "create",
+	"domain": domain,
+	"json": "yes",
+	"php": "ON",
+	"ssl": "ON",
+	"ubandwidth": "unlimited",
+	"uquota": "unlimited"
+})
 
 def get_dkim(domain):
     logger.info(f"Fetching DKIM key for domain {domain}...")
