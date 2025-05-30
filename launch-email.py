@@ -95,8 +95,15 @@ def get_dkim(domain):
 def namesilo_dns_add(domain, host, record_type, value, priority=""):
     logger.info(f"Adding DNS record to NameSilo: {host}.{domain} -> {record_type} {value}")
     url = f"https://www.namesilo.com/api/dnsAddRecord?version=1&type={record_type}&domain={domain}&rrhost={host}&rrvalue={value}&rrttl=7207&key={NAMESILO_API_KEY}"
-    if record_type == "MX" and priority:
+
+    # Ensure rrpriority is always included for MX records
+    if record_type == "MX":
+        if not priority:
+            logger.warning("MX record type requires a priority. 'priority' parameter is empty. Sending with empty priority.")
         url += f"&rrpriority={priority}"
+    elif record_type == "SRV" and priority: # SRV also uses priority but it's optional
+        url += f"&rrpriority={priority}"
+
     try:
         response = requests.get(url)
         response.raise_for_status()
